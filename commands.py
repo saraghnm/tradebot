@@ -126,6 +126,22 @@ def handle_message(text):
                 notify(f"❌ Invalid value for {key}")
         else:
             notify(f"❌ Unknown setting: {key}\nAvailable: {', '.join(settings.keys())}")
+    
+    # SET STOP
+    elif command == "setstop" and len(parts) == 3:
+        symbol = parts[1].upper() + "USDT"
+        if symbol in active_trades:
+            try:
+                new_stop = float(parts[2])
+                active_trades[symbol]["custom_stop_price"] = new_stop
+                from state import save_state
+                from trader import daily_pnl
+                save_state(active_trades, daily_pnl)
+                notify(f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}")
+            except Exception as e:
+                notify(f"❌ Error: {e}")
+        else:
+            notify(f"❌ {parts[1].upper()} is not an active trade!")
 
     # SUMMARY
     elif command == "summary":
@@ -137,20 +153,28 @@ def handle_message(text):
     # HELP
     elif command == "help":
         notify(
-            """🤖 Available commands:
-- buy DOGE 10 → buy $10 of DOGE
-- buy DOGE 10 0.085 → buy with custom stop loss price
-- sell DOGE → force sell DOGE
-- price DOGE → get current price
-- balance → check balances
-- orders DOGE → last 5 orders
+            """🤖 zTrading Bot Commands
+
+🪙 TRADING:
+- buy COIN 10 → buy $10 of a COIN
+- buy COIN 10 0.085 → buy with stop loss price
+- sell COIN → force sell a COIN
+- setstop COIN 0.085 → update stop loss
+
+📊 MONITORING:
+- price COIN → current price for a COIN
 - status → active trades & P/L
 - summary → daily summary
-- set min_profit 1.5 → change settings
+- balance → wallet balances
+- orders COIN → last 5 orders
+
+⚙️ SETTINGS:
+- set min_profit 1.5
 - set trail_amount 0.50
 - set hard_stop_loss -1.0
 - set daily_loss_limit -10.0
-- help → show this message"""
+
+❓ help → show this message"""
         )
 
     else:

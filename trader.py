@@ -41,8 +41,23 @@ def buy(symbol, usdt_amount):
 
 
 def sell(symbol, quantity):
-    client.order_market_sell(symbol=symbol, quantity=quantity)
-
+    try:
+        # Get actual balance instead of stored quantity
+        asset = symbol.replace("USDT", "")
+        account = client.get_account()
+        actual_balance = next(
+            (float(a["free"]) for a in account["balances"] if a["asset"] == asset), 0
+        )
+        if actual_balance > 0:
+            step_size = get_lot_size(symbol)
+            precision = len(str(step_size).rstrip("0").split(".")[-1])
+            quantity = round(actual_balance - (actual_balance % step_size), precision)
+            client.order_market_sell(symbol=symbol, quantity=quantity)
+            notify(f"✅ SELL order placed! Quantity: {quantity}")
+        else:
+            notify(f"⚠️ No balance to sell for {symbol}")
+    except Exception as e:
+        notify(f"❌ Sell error: {e}")
 
 def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None):
     global daily_pnl
@@ -52,7 +67,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
     highest_value = investment
     stop_loss_value = None
     trailing_active = False
-
+    
     active_trades[symbol] = {
         "quantity": quantity,
         "entry_price": entry_price,
@@ -60,6 +75,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
         "custom_stop_price": custom_stop_price,
     }
     save_state(active_trades, daily_pnl)
+    
 
     while True:
         try:
@@ -116,12 +132,11 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 break
 
         except Exception as e:
-            notify(f"⚠️ Error in {symbol}: {e}")
-            time.sleep(5)
-            continue
+                notify(f"⚠️ Error in {symbol}: {e}")
+                time.sleep(30)
+                continue
 
         time.sleep(2)
-
 
 def startup_check():
     try:

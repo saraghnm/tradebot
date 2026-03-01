@@ -8,3 +8,4 @@ __pycache__/
 
 # Environment variables (keep credentials safe!)
 config.py
+config.py
