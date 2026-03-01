@@ -142,7 +142,27 @@ def handle_message(text):
                 notify(f"❌ Error: {e}")
         else:
             notify(f"❌ {parts[1].upper()} is not an active trade!")
-
+    # ALERT
+    elif command == "alert" and len(parts) >= 3:
+        symbol = parts[1].upper() + "USDT"
+        if symbol in active_trades:
+            notify(f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before setting an alert.")
+            return
+        try:
+            target_price = float(parts[2])
+            amount = float(parts[3]) if len(parts) >= 4 else 10.0
+            custom_stop = float(parts[4]) if len(parts) == 5 else None
+            from trader import monitor_alert
+            thread = threading.Thread(
+                target=monitor_alert,
+                args=(symbol, target_price, amount, custom_stop)
+            )
+            thread.daemon = True
+            thread.start()
+            notify(f"🔔 Alert created!\n{parts[1].upper()} → buy at ${target_price}\nAmount: ${amount}\nStop: ${custom_stop if custom_stop else 'default'}")
+        except Exception as e:
+            notify(f"❌ Error: {e}")
+            
     # SUMMARY
     elif command == "summary":
         notify(
@@ -160,6 +180,7 @@ def handle_message(text):
 - buy COIN 10 0.085 → buy with stop loss price
 - sell COIN → force sell a COIN
 - setstop COIN 0.085 → update stop loss
+- alert COIN 1.70 10 1.60 → buy when price hits 1.70
 
 📊 MONITORING:
 - price COIN → current price for a COIN

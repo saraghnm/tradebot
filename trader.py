@@ -15,6 +15,30 @@ _state = load_state()
 active_trades = _state["active_trades"]
 daily_pnl = _state["daily_pnl"]
 
+def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
+    notify(f"🔔 Alert set!\n{symbol} will buy at ${target_price}\nAmount: ${usdt_amount}")
+    
+    while True:
+        try:
+            current_price = get_price(symbol)
+            
+            if current_price <= target_price:
+                notify(f"🔔 Alert triggered!\n{symbol} hit ${current_price}\nBuying now...")
+                quantity, entry_price = buy(symbol, usdt_amount)
+                thread = threading.Thread(
+                    target=monitor_trade,
+                    args=(symbol, quantity, entry_price, usdt_amount, custom_stop_price)
+                )
+                thread.daemon = True
+                thread.start()
+                break
+
+        except Exception as e:
+            notify(f"⚠️ Alert error {symbol}: {e}")
+            time.sleep(30)
+            continue
+
+        time.sleep(5)
 
 def get_price(symbol):
     ticker = client.get_symbol_ticker(symbol=symbol)
@@ -75,6 +99,8 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
         "custom_stop_price": custom_stop_price,
     }
     save_state(active_trades, daily_pnl)
+
+
     
 
     while True:
