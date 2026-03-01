@@ -6,3 +6,5 @@ __pycache__/
 # Log files
 *.log
 
+# Environment variables (keep credentials safe!)
+config.py
