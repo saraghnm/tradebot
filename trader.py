@@ -1,9 +1,8 @@
 # trader.py
-
+from state import save_state, load_state
 import time
 from binance.client import Client
 from config import API_KEY, API_SECRET, settings
-from logger import log
 from notifier import notify
 
 client = Client(API_KEY, API_SECRET)
@@ -11,9 +10,10 @@ client.timestamp_offset = client.get_server_time()["serverTime"] - int(
     time.time() * 1000
 )
 
-# Track active trades
-active_trades = {}
-daily_pnl = 0.0
+# Load state from file on startup
+_state = load_state()
+active_trades = _state["active_trades"]
+daily_pnl = _state["daily_pnl"]
 
 
 def get_price(symbol):
@@ -36,17 +36,15 @@ def buy(symbol, usdt_amount):
     precision = len(str(step_size).rstrip("0").split(".")[-1])
     quantity = round(raw_quantity - (raw_quantity % step_size), precision)
     client.order_market_buy(symbol=symbol, quantity=quantity)
-    log(f"✅ BUY order placed! Quantity: {quantity} at ~${price:,.4f}", type="trade")
     notify(f"🟢 BUY order placed!\nQuantity: {quantity} {symbol}\nPrice: ${price:,.4f}")
     return quantity, price
 
 
 def sell(symbol, quantity):
     client.order_market_sell(symbol=symbol, quantity=quantity)
-    log(f"✅ SELL order placed! Quantity: {quantity}", type="trade")
 
 
-def monitor_trade(symbol, quantity, entry_price, investment):
+def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None):
     global daily_pnl
     min_profit = settings["min_profit"]
     trail_amount = settings["trail_amount"]
@@ -59,9 +57,9 @@ def monitor_trade(symbol, quantity, entry_price, investment):
         "quantity": quantity,
         "entry_price": entry_price,
         "investment": investment,
+        "custom_stop_price": custom_stop_price,
     }
-
-    log(f"👀 Monitoring {symbol}...", type="monitor")
+    save_state(active_trades, daily_pnl)
 
     while True:
         try:
@@ -69,62 +67,65 @@ def monitor_trade(symbol, quantity, entry_price, investment):
             current_value = quantity * current_price
             profit = current_value - investment
 
-            if daily_pnl + profit <= settings["daily_loss_limit"]:
-                log("🚫 DAILY LOSS LIMIT HIT!", type="trade")
+            # Custom price stop loss
+            if custom_stop_price and current_price <= custom_stop_price:
                 sell(symbol, quantity)
                 daily_pnl += profit
-                notify(f"🚫 Daily loss limit hit!\nStopped trading for today\nTotal daily P/L: ${daily_pnl:.4f}")
+                active_trades.pop(symbol, None)
+                save_state(active_trades, daily_pnl)
+                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}")
                 break
 
-            if profit <= hard_stop_loss:
-                log("⛔ HARD STOP-LOSS HIT!", type="trade")
+            # Daily loss limit
+            if daily_pnl + profit <= settings["daily_loss_limit"]:
                 sell(symbol, quantity)
                 daily_pnl += profit
+                active_trades.pop(symbol, None)
+                save_state(active_trades, daily_pnl)
+                notify(f"🚫 Daily loss limit hit!\nTotal daily P/L: ${daily_pnl:.4f}")
+                break
+
+            # Hard stop loss
+            if profit <= hard_stop_loss:
+                sell(symbol, quantity)
+                daily_pnl += profit
+                active_trades.pop(symbol, None)
+                save_state(active_trades, daily_pnl)
                 notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
                 break
 
+            # Update highest value
             if current_value > highest_value:
                 highest_value = current_value
                 if trailing_active:
                     stop_loss_value = highest_value - trail_amount
-                    log(f"📈 New high! Stop-loss moved to ${stop_loss_value:.4f}", type="trade")
 
+            # Activate trailing stop
             if not trailing_active and profit >= min_profit:
                 trailing_active = True
                 stop_loss_value = highest_value - trail_amount
-                log(f"🟢 Trailing stop ACTIVATED at ${stop_loss_value:.4f}", type="trade")
                 notify(f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_value:.4f}")
 
+            # Check trailing stop
             if trailing_active and current_value <= stop_loss_value:
-                log("🔴 STOP-LOSS HIT!", type="trade")
                 sell(symbol, quantity)
                 daily_pnl += profit
+                active_trades.pop(symbol, None)
+                save_state(active_trades, daily_pnl)
                 notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
                 break
 
-            status = (
-                f"TRAILING (stop: ${stop_loss_value:.4f})"
-                if trailing_active
-                else "WAITING"
-            )
-            log(f"Price: ${current_price:,.4f} | Value: ${current_value:.4f} | P/L: ${profit:.4f} | {status}", type="monitor")
-
         except Exception as e:
-            log(f"⚠️ Error: {e} — retrying in 5 seconds...", type="error")
+            notify(f"⚠️ Error in {symbol}: {e}")
             time.sleep(5)
             continue
 
         time.sleep(2)
 
-    active_trades.pop(symbol, None)
-    log("Trade complete! ✅")
-
 
 def startup_check():
     try:
         client.get_account()
-        log("✅ Binance connection OK", type="monitor")
     except Exception as e:
-        log(f"❌ Binance connection failed: {e}", type="error")
         notify(f"❌ Binance connection failed!\n{e}")
         exit(1)

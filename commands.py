@@ -2,7 +2,6 @@
 
 import threading
 from config import settings
-from logger import log
 from notifier import notify
 from trader import (
     active_trades,
@@ -22,7 +21,7 @@ def handle_message(text):
     command = parts[0].lower()
 
     # BUY
-    if len(parts) == 3 and command == "buy":
+    if len(parts) >= 3 and command == "buy":
         symbol = parts[1].upper() + "USDT"
         if symbol in active_trades:
             notify(f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before buying again.")
@@ -32,10 +31,11 @@ def handle_message(text):
             return
         try:
             amount = float(parts[2])
+            custom_stop = float(parts[3]) if len(parts) == 4 else None
             notify(f"📩 Order received!\nBuying ${amount} of {parts[1].upper()}")
             quantity, entry_price = buy(symbol, amount)
             thread = threading.Thread(
-                target=monitor_trade, args=(symbol, quantity, entry_price, amount)
+                target=monitor_trade, args=(symbol, quantity, entry_price, amount, custom_stop)
             )
             thread.daemon = True
             thread.start()
@@ -73,37 +73,47 @@ def handle_message(text):
 
     # BALANCE
     elif command == "balance":
-        account = client.get_account()
-        balances = [
-            f"{a['asset']}: {a['free']}"
-            for a in account["balances"]
-            if float(a["free"]) > 0
-        ]
-        notify("💰 Your balances:\n" + "\n".join(balances[:20]))
+        try:
+            account = client.get_account()
+            balances = [
+                f"{a['asset']}: {a['free']}"
+                for a in account["balances"]
+                if float(a["free"]) > 0
+            ]
+            notify("💰 Your balances:\n" + "\n".join(balances[:20]))
+        except Exception as e:
+            notify(f"❌ Error: {e}")
 
     # ORDERS
     elif command == "orders" and len(parts) > 1:
-        orders = client.get_all_orders(symbol=parts[1].upper() + "USDT")
-        if orders:
-            msg = "\n".join(
-                [f"{o['side']} {o['origQty']} @ {o['price']} - {o['status']}" for o in orders[-5:]]
-            )
-            notify(f"📋 Last 5 orders:\n{msg}")
-        else:
-            notify(f"No orders found for {parts[1].upper()}")
+        try:
+            orders = client.get_all_orders(symbol=parts[1].upper() + "USDT")
+            if orders:
+                msg = "\n".join(
+                    [f"{o['side']} {o['origQty']} @ {o['price']} - {o['status']}" for o in orders[-5:]]
+                )
+                notify(f"📋 Last 5 orders:\n{msg}")
+            else:
+                notify(f"No orders found for {parts[1].upper()}")
+        except Exception as e:
+            notify(f"❌ Error: {e}")
 
     # STATUS
     elif command == "status":
-        if active_trades:
-            msg = ""
-            for symbol, trade in active_trades.items():
-                current_price = get_price(symbol)
-                current_value = trade["quantity"] * current_price
-                profit = current_value - trade["investment"]
-                msg += f"📊 {symbol}\nEntry: ${trade['entry_price']:,.4f}\nCurrent: ${current_price:,.4f}\nP/L: ${profit:.4f}\n\n"
-            notify(f"📊 Active trades:\n{msg}Daily P/L: ${daily_pnl:.4f}")
-        else:
-            notify(f"No active trades\nDaily P/L: ${daily_pnl:.4f}")
+        try:
+            if active_trades:
+                msg = ""
+                for symbol, trade in active_trades.items():
+                    current_price = get_price(symbol)
+                    current_value = trade["quantity"] * current_price
+                    profit = current_value - trade["investment"]
+                    stop_info = f"\nStop: ${trade['custom_stop_price']}" if trade.get("custom_stop_price") else ""
+                    msg += f"📊 {symbol}\nEntry: ${trade['entry_price']:,.4f}\nCurrent: ${current_price:,.4f}\nP/L: ${profit:.4f}{stop_info}\n\n"
+                notify(f"📊 Active trades:\n{msg}Daily P/L: ${daily_pnl:.4f}")
+            else:
+                notify(f"No active trades\nDaily P/L: ${daily_pnl:.4f}")
+        except Exception as e:
+            notify(f"❌ Error: {e}")
 
     # SET
     elif command == "set" and len(parts) == 3:
@@ -129,6 +139,7 @@ def handle_message(text):
         notify(
             """🤖 Available commands:
 - buy DOGE 10 → buy $10 of DOGE
+- buy DOGE 10 0.085 → buy with custom stop loss price
 - sell DOGE → force sell DOGE
 - price DOGE → get current price
 - balance → check balances
