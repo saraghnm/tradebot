@@ -3,9 +3,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Log files
+# Credentials
+config.py
+
+# Logs
 *.log
 
-# Environment variables (keep credentials safe!)
-config.py
-config.py
+# State file (contains trade data)
+state.json
