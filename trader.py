@@ -102,12 +102,18 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
 
 
     
+    error_count = 0
 
     while True:
         try:
             current_price = get_price(symbol)
             current_value = quantity * current_price
             profit = current_value - investment
+
+            # Reset error count on success
+            if error_count > 0:
+                error_count = 0
+                notify(f"✅ Connection restored! Resuming {symbol}")
 
             # Custom price stop loss
             if custom_stop_price and current_price <= custom_stop_price:
@@ -158,9 +164,19 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 break
 
         except Exception as e:
-                notify(f"⚠️ Error in {symbol}: {e}")
+            error_count += 1
+
+            if error_count == 3:
+                notify(f"⚠️ Connection lost for {symbol}! Retrying...")
+
+            if error_count < 3:
+                time.sleep(5)
+            elif error_count < 10:
+                time.sleep(15)
+            else:
                 time.sleep(30)
-                continue
+
+            continue
 
         time.sleep(2)
 
