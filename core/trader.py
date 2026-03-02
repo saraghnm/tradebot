@@ -1,9 +1,9 @@
 # trader.py
-from state import save_state, load_state
+from core.state import save_state, load_state
 import time
 from binance.client import Client
 from config import API_KEY, API_SECRET, settings
-from notifier import notify
+from core.notifier import notify
 
 client = Client(API_KEY, API_SECRET)
 client.timestamp_offset = client.get_server_time()["serverTime"] - int(
@@ -108,10 +108,9 @@ def sell(symbol, quantity):
 def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None):
     global daily_pnl
     min_profit = settings["min_profit"]
-    trail_amount = settings["trail_amount"]
     hard_stop_loss = settings["hard_stop_loss"]
-    highest_value = investment
-    stop_loss_value = None
+    highest_price = entry_price
+    stop_loss_price = None
     trailing_active = False
 
     active_trades[symbol] = {
@@ -140,7 +139,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 sell(symbol, quantity)
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
-                save_state(active_trades, daily_pnl)
+                save_state(active_trades, daily_pnl, active_alerts)
                 notify(
                     f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}"
                 )
@@ -151,7 +150,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 sell(symbol, quantity)
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
-                save_state(active_trades, daily_pnl)
+                save_state(active_trades, daily_pnl, active_alerts)
                 notify(f"🚫 Daily loss limit hit!\nTotal daily P/L: ${daily_pnl:.4f}")
                 break
 
@@ -160,33 +159,28 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 sell(symbol, quantity)
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
-                save_state(active_trades, daily_pnl)
+                save_state(active_trades, daily_pnl, active_alerts)
                 notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
                 break
 
             # Update highest value
-            if current_value > highest_value:
-                highest_value = current_value
+            if current_price > highest_price:
+                highest_price = current_price
                 if trailing_active:
-                    stop_loss_value = highest_value - trail_amount
-
+                    stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
             # Activate trailing stop
             if not trailing_active and profit >= min_profit:
                 trailing_active = True
-                stop_loss_value = highest_value - trail_amount
-                notify(
-                    f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_value:.4f}"
-                )
+                stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
+                notify(f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_price:.4f}")
 
             # Check trailing stop
-            if trailing_active and current_value <= stop_loss_value:
+            if trailing_active and current_price <= stop_loss_price:
                 sell(symbol, quantity)
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
-                save_state(active_trades, daily_pnl)
-                notify(
-                    f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}"
-                )
+                save_state(active_trades, daily_pnl, active_alerts)
+                notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
                 break
 
         except Exception as e:

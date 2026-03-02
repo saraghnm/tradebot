@@ -1,14 +1,14 @@
 # bot.py
 
 import time
-from notifier import notify, get_updates
-from trader import startup_check, active_trades
+from core.notifier import notify, get_updates
+from core.trader import startup_check, active_trades
 from commands import handle_message
 import threading
 
 
 def resume_trades():
-    from trader import monitor_trade
+    from core.trader import monitor_trade
     for symbol, trade in active_trades.items():
         print(f"▶️ Resuming trade: {symbol}")
         thread = threading.Thread(
@@ -26,7 +26,7 @@ def resume_trades():
     if active_trades:
         notify(f"▶️ Resumed {len(active_trades)} active trade(s) from last session!")
 def resume_alerts():
-    from trader import monitor_alert, active_alerts
+    from core.trader import monitor_alert, active_alerts
     for symbol, alert in active_alerts.items():
         print(f"🔔 Resuming alert: {symbol}")
         thread = threading.Thread(

@@ -2,8 +2,8 @@
 
 import threading
 from config import settings
-from notifier import notify
-from trader import (
+from core.notifier import notify
+from core.trader import (
     active_trades,
     daily_pnl,
     client,
@@ -134,8 +134,8 @@ def handle_message(text):
             try:
                 new_stop = float(parts[2])
                 active_trades[symbol]["custom_stop_price"] = new_stop
-                from state import save_state
-                from trader import daily_pnl
+                from core.state import save_state
+                from core.trader import daily_pnl
                 save_state(active_trades, daily_pnl)
                 notify(f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}")
             except Exception as e:
@@ -152,7 +152,7 @@ def handle_message(text):
             target_price = float(parts[2])
             amount = float(parts[3]) if len(parts) >= 4 else 10.0
             custom_stop = float(parts[4]) if len(parts) == 5 else None
-            from trader import monitor_alert
+            from core.trader import monitor_alert
             thread = threading.Thread(
                 target=monitor_alert,
                 args=(symbol, target_price, amount, custom_stop)
@@ -164,7 +164,7 @@ def handle_message(text):
             notify(f"❌ Error: {e}")
     # ALERTS (view all)
     elif command == "alerts":
-        from trader import active_alerts
+        from core.trader import active_alerts
         if active_alerts:
             msg = ""
             for symbol, alert in active_alerts.items():
@@ -175,7 +175,7 @@ def handle_message(text):
 
     # CANCEL ALERT
     elif command == "cancelalert" and len(parts) > 1:
-        from trader import active_alerts
+        from core.trader import active_alerts
         symbol = parts[1].upper() + "USDT"
         if symbol in active_alerts:
             active_alerts.pop(symbol, None)
@@ -213,7 +213,7 @@ def handle_message(text):
 
 ⚙️ SETTINGS:
 - set min_profit 1.5
-- set trail_amount 0.50
+- set trail_percent 5.0
 - set hard_stop_loss -1.0
 - set daily_loss_limit -10.0
 
