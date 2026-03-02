@@ -25,15 +25,27 @@ def resume_trades():
         thread.start()
     if active_trades:
         notify(f"▶️ Resumed {len(active_trades)} active trade(s) from last session!")
+def resume_alerts():
+    from trader import monitor_alert, active_alerts
+    for symbol, alert in active_alerts.items():
+        print(f"🔔 Resuming alert: {symbol}")
+        thread = threading.Thread(
+            target=monitor_alert,
+            args=(
+                symbol,
+                alert["target_price"],
+                alert["amount"],
+                alert.get("custom_stop_price"),
+            )
+        )
+        thread.daemon = True
+        thread.start()
+    if active_alerts:
+        notify(f"🔔 Resumed {len(active_alerts)} active alert(s) from last session!")
 
-
-# Startup check
 startup_check()
-
-# Resume any active trades from last session
 resume_trades()
-
-# Notify bot is online
+resume_alerts()
 notify("🤖 Bot is online! Send 'help' for available commands")
 
 # Skip old messages on startup

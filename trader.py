@@ -14,31 +14,52 @@ client.timestamp_offset = client.get_server_time()["serverTime"] - int(
 _state = load_state()
 active_trades = _state["active_trades"]
 daily_pnl = _state["daily_pnl"]
+active_alerts = _state.get("active_alerts", {})
+
 
 def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
-    notify(f"🔔 Alert set!\n{symbol} will buy at ${target_price}\nAmount: ${usdt_amount}")
-    
+    active_alerts[symbol] = {
+        "target_price": target_price,
+        "amount": usdt_amount,
+        "custom_stop_price": custom_stop_price,
+    }
+    save_state(active_trades, daily_pnl, active_alerts)
+    notify(
+        f"🔔 Alert set!\n{symbol} will buy at ${target_price}\nAmount: ${usdt_amount}"
+    )
+
     while True:
+        if symbol not in active_alerts:
+            notify(f"🚫 Alert cancelled for {symbol}")
+            break
         try:
             current_price = get_price(symbol)
-            
             if current_price <= target_price:
-                notify(f"🔔 Alert triggered!\n{symbol} hit ${current_price}\nBuying now...")
+                notify(
+                    f"🔔 Alert triggered!\n{symbol} hit ${current_price}\nBuying now..."
+                )
+                active_alerts.pop(symbol, None)
+                save_state(active_trades, daily_pnl, active_alerts)
                 quantity, entry_price = buy(symbol, usdt_amount)
                 thread = threading.Thread(
                     target=monitor_trade,
-                    args=(symbol, quantity, entry_price, usdt_amount, custom_stop_price)
+                    args=(
+                        symbol,
+                        quantity,
+                        entry_price,
+                        usdt_amount,
+                        custom_stop_price,
+                    ),
                 )
                 thread.daemon = True
                 thread.start()
                 break
-
         except Exception as e:
             notify(f"⚠️ Alert error {symbol}: {e}")
             time.sleep(30)
             continue
-
         time.sleep(5)
+
 
 def get_price(symbol):
     ticker = client.get_symbol_ticker(symbol=symbol)
@@ -83,6 +104,7 @@ def sell(symbol, quantity):
     except Exception as e:
         notify(f"❌ Sell error: {e}")
 
+
 def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None):
     global daily_pnl
     min_profit = settings["min_profit"]
@@ -91,17 +113,15 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
     highest_value = investment
     stop_loss_value = None
     trailing_active = False
-    
+
     active_trades[symbol] = {
         "quantity": quantity,
         "entry_price": entry_price,
         "investment": investment,
         "custom_stop_price": custom_stop_price,
     }
-    save_state(active_trades, daily_pnl)
+    save_state(active_trades, daily_pnl, active_alerts)
 
-
-    
     error_count = 0
 
     while True:
@@ -121,7 +141,9 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl)
-                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}")
+                notify(
+                    f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}"
+                )
                 break
 
             # Daily loss limit
@@ -152,7 +174,9 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
             if not trailing_active and profit >= min_profit:
                 trailing_active = True
                 stop_loss_value = highest_value - trail_amount
-                notify(f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_value:.4f}")
+                notify(
+                    f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_value:.4f}"
+                )
 
             # Check trailing stop
             if trailing_active and current_value <= stop_loss_value:
@@ -160,7 +184,9 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl)
-                notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
+                notify(
+                    f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}"
+                )
                 break
 
         except Exception as e:
@@ -179,6 +205,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
             continue
 
         time.sleep(2)
+
 
 def startup_check():
     try:

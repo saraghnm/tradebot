@@ -162,6 +162,26 @@ def handle_message(text):
             notify(f"🔔 Alert created!\n{parts[1].upper()} → buy at ${target_price}\nAmount: ${amount}\nStop: ${custom_stop if custom_stop else 'default'}")
         except Exception as e:
             notify(f"❌ Error: {e}")
+    # ALERTS (view all)
+    elif command == "alerts":
+        from trader import active_alerts
+        if active_alerts:
+            msg = ""
+            for symbol, alert in active_alerts.items():
+                msg += f"🔔 {symbol}\nBuy at: ${alert['target_price']}\nAmount: ${alert['amount']}\nStop: ${alert['custom_stop_price'] if alert['custom_stop_price'] else 'default'}\n\n"
+            notify(f"🔔 Active alerts:\n{msg}")
+        else:
+            notify("No active alerts")
+
+    # CANCEL ALERT
+    elif command == "cancelalert" and len(parts) > 1:
+        from trader import active_alerts
+        symbol = parts[1].upper() + "USDT"
+        if symbol in active_alerts:
+            active_alerts.pop(symbol, None)
+            notify(f"🚫 Alert cancelled for {parts[1].upper()}")
+        else:
+            notify(f"❌ No active alert for {parts[1].upper()}")
             
     # SUMMARY
     elif command == "summary":
@@ -181,6 +201,8 @@ def handle_message(text):
 - sell COIN → force sell a COIN
 - setstop COIN 0.085 → update stop loss
 - alert COIN 1.70 10 1.60 → buy when price hits 1.70
+- alerts → view all active alerts
+- cancelalert COIN → cancel an alert
 
 📊 MONITORING:
 - price COIN → current price for a COIN
