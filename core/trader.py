@@ -1,6 +1,7 @@
 # trader.py
 from core.state import save_state, load_state
 import time
+import threading
 from binance.client import Client
 from config import API_KEY, API_SECRET, settings
 from core.notifier import notify
@@ -24,9 +25,7 @@ def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
         "custom_stop_price": custom_stop_price,
     }
     save_state(active_trades, daily_pnl, active_alerts)
-    notify(
-        f"🔔 Alert set!\n{symbol} will buy at ${target_price}\nAmount: ${usdt_amount}"
-    )
+    notify(f"🔔 Alert set!\n{symbol} will buy at ${target_price}\nAmount: ${usdt_amount}")
 
     while True:
         if symbol not in active_alerts:
@@ -35,21 +34,13 @@ def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
         try:
             current_price = get_price(symbol)
             if current_price <= target_price:
-                notify(
-                    f"🔔 Alert triggered!\n{symbol} hit ${current_price}\nBuying now..."
-                )
+                notify(f"🔔 Alert triggered!\n{symbol} hit ${current_price}\nBuying now...")
                 active_alerts.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
                 quantity, entry_price = buy(symbol, usdt_amount)
                 thread = threading.Thread(
                     target=monitor_trade,
-                    args=(
-                        symbol,
-                        quantity,
-                        entry_price,
-                        usdt_amount,
-                        custom_stop_price,
-                    ),
+                    args=(symbol, quantity, entry_price, usdt_amount, custom_stop_price),
                 )
                 thread.daemon = True
                 thread.start()
@@ -87,7 +78,6 @@ def buy(symbol, usdt_amount):
 
 def sell(symbol, quantity):
     try:
-        # Get actual balance instead of stored quantity
         asset = symbol.replace("USDT", "")
         account = client.get_account()
         actual_balance = next(
@@ -105,19 +95,23 @@ def sell(symbol, quantity):
         notify(f"❌ Sell error: {e}")
 
 
-def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None):
+def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None, take_profit1=None, take_profit2=None):
     global daily_pnl
     min_profit = settings["min_profit"]
     hard_stop_loss = settings["hard_stop_loss"]
     highest_price = entry_price
     stop_loss_price = None
     trailing_active = False
+    half_sold = False
+    original_quantity = quantity
 
     active_trades[symbol] = {
         "quantity": quantity,
         "entry_price": entry_price,
         "investment": investment,
         "custom_stop_price": custom_stop_price,
+        "take_profit1": take_profit1,
+        "take_profit2": take_profit2,
     }
     save_state(active_trades, daily_pnl, active_alerts)
 
@@ -140,9 +134,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
-                notify(
-                    f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}"
-                )
+                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}")
                 break
 
             # Daily loss limit
@@ -163,13 +155,33 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
                 break
 
-            # Update highest value
+            # Take profit 1 — sell 50%
+            if take_profit1 and not half_sold and current_price >= take_profit1:
+                half_quantity = quantity / 2
+                step_size = get_lot_size(symbol)
+                precision = len(str(step_size).rstrip("0").split(".")[-1])
+                half_quantity = round(half_quantity - (half_quantity % step_size), precision)
+                client.order_market_sell(symbol=symbol, quantity=half_quantity)
+                quantity = quantity - half_quantity
+                half_sold = True
+                half_profit = (take_profit1 - entry_price) * half_quantity
+                notify(f"🎯 Take profit 1 hit!\nSold 50% of {symbol} at ${current_price}\nProfit locked: ${half_profit:.4f}\nHolding remaining: {quantity}")
+
+            # Take profit 2 — activate trailing on rest
+            if take_profit2 and half_sold and not trailing_active and current_price >= take_profit2:
+                trailing_active = True
+                highest_price = current_price
+                stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
+                notify(f"🎯 Take profit 2 hit!\nTrailing stop ACTIVATED on remaining {symbol}\nStop-loss at: ${stop_loss_price:.4f}")
+
+            # Update highest price
             if current_price > highest_price:
                 highest_price = current_price
                 if trailing_active:
                     stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
-            # Activate trailing stop
-            if not trailing_active and profit >= min_profit:
+
+            # Activate trailing stop (if no take profit levels set)
+            if not trailing_active and not take_profit2 and profit >= min_profit:
                 trailing_active = True
                 stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
                 notify(f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_price:.4f}")

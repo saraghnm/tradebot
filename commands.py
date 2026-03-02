@@ -24,18 +24,33 @@ def handle_message(text):
     if len(parts) >= 3 and command == "buy":
         symbol = parts[1].upper() + "USDT"
         if symbol in active_trades:
-            notify(f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before buying again.")
+            notify(
+                f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before buying again."
+            )
             return
         if daily_pnl <= settings["daily_loss_limit"]:
-            notify(f"🚫 Daily loss limit reached! No more trades today.\nDaily P/L: ${daily_pnl:.4f}")
+            notify(
+                f"🚫 Daily loss limit reached! No more trades today.\nDaily P/L: ${daily_pnl:.4f}"
+            )
             return
         try:
             amount = float(parts[2])
-            custom_stop = float(parts[3]) if len(parts) == 4 else None
+            custom_stop = float(parts[3]) if len(parts) >= 4 else None
+            take_profit1 = float(parts[4]) if len(parts) >= 5 else None
+            take_profit2 = float(parts[5]) if len(parts) >= 6 else None
             notify(f"📩 Order received!\nBuying ${amount} of {parts[1].upper()}")
             quantity, entry_price = buy(symbol, amount)
             thread = threading.Thread(
-                target=monitor_trade, args=(symbol, quantity, entry_price, amount, custom_stop)
+                target=monitor_trade,
+                args=(
+                    symbol,
+                    quantity,
+                    entry_price,
+                    amount,
+                    custom_stop,
+                    take_profit1,
+                    take_profit2,
+                ),
             )
             thread.daemon = True
             thread.start()
@@ -48,7 +63,12 @@ def handle_message(text):
         try:
             account = client.get_account()
             balance = next(
-                (float(a["free"]) for a in account["balances"] if a["asset"] == parts[1].upper()), 0
+                (
+                    float(a["free"])
+                    for a in account["balances"]
+                    if a["asset"] == parts[1].upper()
+                ),
+                0,
             )
             if balance > 0:
                 step_size = get_lot_size(symbol)
@@ -90,7 +110,10 @@ def handle_message(text):
             orders = client.get_all_orders(symbol=parts[1].upper() + "USDT")
             if orders:
                 msg = "\n".join(
-                    [f"{o['side']} {o['origQty']} @ {o['price']} - {o['status']}" for o in orders[-5:]]
+                    [
+                        f"{o['side']} {o['origQty']} @ {o['price']} - {o['status']}"
+                        for o in orders[-5:]
+                    ]
                 )
                 notify(f"📋 Last 5 orders:\n{msg}")
             else:
@@ -107,8 +130,22 @@ def handle_message(text):
                     current_price = get_price(symbol)
                     current_value = trade["quantity"] * current_price
                     profit = current_value - trade["investment"]
-                    stop_info = f"\nStop: ${trade['custom_stop_price']}" if trade.get("custom_stop_price") else ""
-                    msg += f"📊 {symbol}\nEntry: ${trade['entry_price']:,.4f}\nCurrent: ${current_price:,.4f}\nP/L: ${profit:.4f}{stop_info}\n\n"
+                    stop_info = (
+                        f"\nStop: ${trade['custom_stop_price']}"
+                        if trade.get("custom_stop_price")
+                        else ""
+                    )
+                    tp1_info = (
+                        f"\nTP1: ${trade['take_profit1']}"
+                        if trade.get("take_profit1")
+                        else ""
+                    )
+                    tp2_info = (
+                        f"\nTP2: ${trade['take_profit2']}"
+                        if trade.get("take_profit2")
+                        else ""
+                    )
+                    msg += f"📊 {symbol}\nEntry: ${trade['entry_price']:,.4f}\nCurrent: ${current_price:,.4f}\nP/L: ${profit:.4f}{stop_info}{tp1_info}{tp2_info}\n\n"
                 notify(f"📊 Active trades:\n{msg}Daily P/L: ${daily_pnl:.4f}")
             else:
                 notify(f"No active trades\nDaily P/L: ${daily_pnl:.4f}")
@@ -125,8 +162,10 @@ def handle_message(text):
             except Exception:
                 notify(f"❌ Invalid value for {key}")
         else:
-            notify(f"❌ Unknown setting: {key}\nAvailable: {', '.join(settings.keys())}")
-    
+            notify(
+                f"❌ Unknown setting: {key}\nAvailable: {', '.join(settings.keys())}"
+            )
+
     # SET STOP
     elif command == "setstop" and len(parts) == 3:
         symbol = parts[1].upper() + "USDT"
@@ -136,8 +175,12 @@ def handle_message(text):
                 active_trades[symbol]["custom_stop_price"] = new_stop
                 from core.state import save_state
                 from core.trader import daily_pnl
-                save_state(active_trades, daily_pnl)
-                notify(f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}")
+
+                from core.trader import active_alerts
+                save_state(active_trades, daily_pnl, active_alerts)
+                notify(
+                    f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}"
+                )
             except Exception as e:
                 notify(f"❌ Error: {e}")
         else:
@@ -146,25 +189,30 @@ def handle_message(text):
     elif command == "alert" and len(parts) >= 3:
         symbol = parts[1].upper() + "USDT"
         if symbol in active_trades:
-            notify(f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before setting an alert.")
+            notify(
+                f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before setting an alert."
+            )
             return
         try:
             target_price = float(parts[2])
             amount = float(parts[3]) if len(parts) >= 4 else 10.0
             custom_stop = float(parts[4]) if len(parts) == 5 else None
             from core.trader import monitor_alert
+
             thread = threading.Thread(
-                target=monitor_alert,
-                args=(symbol, target_price, amount, custom_stop)
+                target=monitor_alert, args=(symbol, target_price, amount, custom_stop)
             )
             thread.daemon = True
             thread.start()
-            notify(f"🔔 Alert created!\n{parts[1].upper()} → buy at ${target_price}\nAmount: ${amount}\nStop: ${custom_stop if custom_stop else 'default'}")
+            notify(
+                f"🔔 Alert created!\n{parts[1].upper()} → buy at ${target_price}\nAmount: ${amount}\nStop: ${custom_stop if custom_stop else 'default'}"
+            )
         except Exception as e:
             notify(f"❌ Error: {e}")
     # ALERTS (view all)
     elif command == "alerts":
         from core.trader import active_alerts
+
         if active_alerts:
             msg = ""
             for symbol, alert in active_alerts.items():
@@ -176,13 +224,14 @@ def handle_message(text):
     # CANCEL ALERT
     elif command == "cancelalert" and len(parts) > 1:
         from core.trader import active_alerts
+
         symbol = parts[1].upper() + "USDT"
         if symbol in active_alerts:
             active_alerts.pop(symbol, None)
             notify(f"🚫 Alert cancelled for {parts[1].upper()}")
         else:
             notify(f"❌ No active alert for {parts[1].upper()}")
-            
+
     # SUMMARY
     elif command == "summary":
         notify(
@@ -196,26 +245,27 @@ def handle_message(text):
             """🤖 zTrading Bot Commands
 
 🪙 TRADING:
-- buy COIN 10 → buy $10 of a COIN
-- buy COIN 10 0.085 → buy with stop loss price
-- sell COIN → force sell a COIN
-- setstop COIN 0.085 → update stop loss
-- alert COIN 1.70 10 1.60 → buy when price hits 1.70
-- alerts → view all active alerts
-- cancelalert COIN → cancel an alert
+• buy COIN 10 → buy $10 of COIN
+• buy COIN 10 0.085 → buy with stop loss
+• buy COIN 10 0.085 1.30 1.50 → stop loss + take profit levels
+• sell COIN → force sell COIN
+• setstop COIN 0.085 → update stop loss
+• alert COIN 1.70 10 1.60 → auto buy at target price
+• alerts → view all active alerts
+• cancelalert COIN → cancel an alert
 
 📊 MONITORING:
-- price COIN → current price for a COIN
-- status → active trades & P/L
-- summary → daily summary
-- balance → wallet balances
-- orders COIN → last 5 orders
+• price COIN → current price for a COIN
+• status → active trades & P/L
+• summary → daily summary
+• balance → wallet balances
+• orders COIN → last 5 orders
 
 ⚙️ SETTINGS:
-- set min_profit 1.5
-- set trail_percent 5.0
-- set hard_stop_loss -1.0
-- set daily_loss_limit -10.0
+• set min_profit 1.5
+• set trail_percent 5.0
+• set hard_stop_loss -1.0
+• set daily_loss_limit -10.0
 
 ❓ help → show this message"""
         )
