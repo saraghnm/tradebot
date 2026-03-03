@@ -76,6 +76,17 @@ def handle_message(text):
                 quantity = round(balance - (balance % step_size), precision)
                 sell(symbol, quantity)
                 active_trades.pop(symbol, None)
+                current_price = get_price(symbol)
+                from core.history import save_trade
+
+                save_trade(
+                    symbol,
+                    trade["entry_price"] if symbol in active_trades else 0,
+                    current_price,
+                    0,
+                    0,
+                    "Manual sell",
+                )
                 notify(f"🔴 Force sell executed!\n{parts[1].upper()} sold: {quantity}")
             else:
                 notify(f"❌ No {parts[1].upper()} balance to sell!")
@@ -265,7 +276,39 @@ def handle_message(text):
             notify("👀 Tracking:\n" + "\n".join(active_trackers.keys()))
         else:
             notify("No active trackers")
+    # HISTORY
+    elif command == "history":
+        from core.history import get_history
 
+        trades = get_history(10)
+        if trades:
+            msg = "📜 Last 10 trades:\n\n"
+            for i, t in enumerate(reversed(trades), 1):
+                emoji = "✅" if t["profit"] > 0 else "❌"
+                msg += f"{emoji} {t['symbol']}\nEntry: ${t['entry_price']} | Exit: ${t['exit_price']}\nP/L: ${t['profit']} | {t['reason']}\n{t['date']}\n\n"
+            notify(msg)
+        else:
+            notify("📜 No trade history yet!")
+
+    # STATS
+    elif command == "stats":
+        from core.history import get_stats
+
+        s = get_stats()
+        if s:
+            notify(
+                f"""📈 Trading Stats
+
+                Total trades: {s['total']}
+                Wins: {s['wins']} | Losses: {s['losses']}
+                Win rate: {s['win_rate']:.1f}%
+                Total P/L: ${s['total_profit']}
+
+                🏆 Best trade: {s['best']['symbol']} +${s['best']['profit']}
+                💔 Worst trade: {s['worst']['symbol']} ${s['worst']['profit']}"""
+            )
+        else:
+            notify("📊 No stats yet — make some trades first!")
     # ANALYZE
     elif command == "analyze" and len(parts) > 1:
         symbol = parts[1].upper() + "USDT"
@@ -315,6 +358,8 @@ def handle_message(text):
 • balance → wallet balances
 • orders COIN → last 5 orders
 • analyze COIN → AI trend analysis
+• history → last 10 closed trades
+• stats → win rate and total P/L
 
 ⚙️ SETTINGS:
 • set min_profit 1.5

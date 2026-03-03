@@ -156,16 +156,18 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
-                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nLoss: ${profit:.4f}")
+                save_trade(symbol, entry_price, current_price, investment, profit, "Custom stop loss")
+                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nP/L: ${profit:.4f}")
                 break
 
             # Daily loss limit
-            if daily_pnl + profit <= settings["daily_loss_limit"]:
+            if profit <= hard_stop_loss:
                 sell(symbol, quantity)
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
-                notify(f"🚫 Daily loss limit hit!\nTotal daily P/L: ${daily_pnl:.4f}")
+                save_trade(symbol, entry_price, current_price, investment, profit, "Hard stop loss")
+                notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
                 break
 
             # Hard stop loss
@@ -174,6 +176,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
+                save_trade(symbol, entry_price, current_price, investment, profit, "Hard stop loss")
                 notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
                 break
 
@@ -214,6 +217,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
+                save_trade(symbol, entry_price, current_price, investment, profit, "Trailing stop loss")
                 notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
                 
                 # Auto re-entry analysis

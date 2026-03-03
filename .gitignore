@@ -11,6 +11,7 @@ config.py
 
 # State file (contains trade data)
 state.json
+history.json
 
 # doc
 *.docx

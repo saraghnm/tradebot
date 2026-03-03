@@ -5,6 +5,9 @@ from core.notifier import notify, get_updates
 from core.trader import startup_check, active_trades
 from commands import handle_message
 import threading
+import core.trader as trader_module
+from core.scheduler import start_scheduler
+from core.trader import get_price
 
 
 def resume_trades():
@@ -19,12 +22,16 @@ def resume_trades():
                 trade["entry_price"],
                 trade["investment"],
                 trade.get("custom_stop_price"),
+                trade.get("take_profit1"),
+                trade.get("take_profit2"),
             )
         )
         thread.daemon = True
         thread.start()
     if active_trades:
         notify(f"▶️ Resumed {len(active_trades)} active trade(s) from last session!")
+
+
 def resume_alerts():
     from core.trader import monitor_alert, active_alerts
     for symbol, alert in active_alerts.items():
@@ -43,9 +50,16 @@ def resume_alerts():
     if active_alerts:
         notify(f"🔔 Resumed {len(active_alerts)} active alert(s) from last session!")
 
+
+# Startup
 startup_check()
 resume_trades()
 resume_alerts()
+
+# Start scheduler
+daily_pnl_ref = [trader_module.daily_pnl]
+start_scheduler(active_trades, daily_pnl_ref, get_price)
+
 notify("🤖 Bot is online! Send 'help' for available commands")
 
 # Skip old messages on startup
