@@ -177,6 +177,7 @@ def handle_message(text):
                 from core.trader import daily_pnl
 
                 from core.trader import active_alerts
+
                 save_state(active_trades, daily_pnl, active_alerts)
                 notify(
                     f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}"
@@ -232,6 +233,51 @@ def handle_message(text):
         else:
             notify(f"❌ No active alert for {parts[1].upper()}")
 
+    # TRACK
+    elif command == "track" and len(parts) > 1:
+        from core.trader import active_trackers, monitor_tracker
+
+        symbol = parts[1].upper() + "USDT"
+        percent = float(parts[2]) if len(parts) > 2 else 5.0
+        if symbol in active_trackers:
+            notify(f"⚠️ Already tracking {parts[1].upper()}!")
+        else:
+            active_trackers[symbol] = True
+            thread = threading.Thread(target=monitor_tracker, args=(symbol, percent))
+            thread.daemon = True
+            thread.start()
+
+    # UNTRACK
+    elif command == "untrack" and len(parts) > 1:
+        from core.trader import active_trackers
+
+        symbol = parts[1].upper() + "USDT"
+        if symbol in active_trackers:
+            active_trackers.pop(symbol, None)
+        else:
+            notify(f"❌ Not tracking {parts[1].upper()}")
+
+    # TRACKERS
+    elif command == "trackers":
+        from core.trader import active_trackers
+
+        if active_trackers:
+            notify("👀 Tracking:\n" + "\n".join(active_trackers.keys()))
+        else:
+            notify("No active trackers")
+
+    # ANALYZE
+    elif command == "analyze" and len(parts) > 1:
+        symbol = parts[1].upper() + "USDT"
+        try:
+            notify(f"🤖 Analyzing {parts[1].upper()}...")
+            from core.analyzer import analyze_coin
+
+            analysis = analyze_coin(symbol)
+            notify(f"📊 {parts[1].upper()} Analysis\n\n{analysis}")
+        except Exception as e:
+            notify(f"❌ Error: {e}")
+
     # SUMMARY
     elif command == "summary":
         notify(
@@ -245,27 +291,36 @@ def handle_message(text):
             """🤖 zTrading Bot Commands
 
 🪙 TRADING:
-• buy COIN 10 → buy $10 of COIN
-• buy COIN 10 0.085 → buy with stop loss
-• buy COIN 10 0.085 1.30 1.50 → stop loss + take profit levels
-• sell COIN → force sell COIN
-• setstop COIN 0.085 → update stop loss
-• alert COIN 1.70 10 1.60 → auto buy at target price
-• alerts → view all active alerts
-• cancelalert COIN → cancel an alert
+- buy COIN 10 → buy $10 of COIN
+- buy COIN 10 0.085 → with stop loss
+- buy COIN 10 0.085 1.30 1.50 → stop + take profits
+- sell COIN → force sell
+- setstop COIN 0.085 → update stop loss
+
+🎯 ALERTS:
+- alert COIN 1.70 10 1.60 → buy when price hits 1.70
+- alerts → view all active alerts
+- cancelalert COIN → cancel an alert
+
+👀 TRACKING:
+- track COIN → alert on 5% moves
+- track COIN 3 → alert on 3% moves
+- untrack COIN → stop tracking
+- trackers → view tracked coins
 
 📊 MONITORING:
-• price COIN → current price for a COIN
-• status → active trades & P/L
-• summary → daily summary
-• balance → wallet balances
-• orders COIN → last 5 orders
+- price COIN → current price
+- status → active trades & P/L
+- summary → daily summary
+- balance → wallet balances
+- orders COIN → last 5 orders
+- analyze COIN → AI trend analysis
 
 ⚙️ SETTINGS:
-• set min_profit 1.5
-• set trail_percent 5.0
-• set hard_stop_loss -1.0
-• set daily_loss_limit -10.0
+- set min_profit 1.5
+- set trail_percent 5.0
+- set hard_stop_loss -1.0
+- set daily_loss_limit -10.0
 
 ❓ help → show this message"""
         )

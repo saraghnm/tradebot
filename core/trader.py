@@ -16,6 +16,7 @@ _state = load_state()
 active_trades = _state["active_trades"]
 daily_pnl = _state["daily_pnl"]
 active_alerts = _state.get("active_alerts", {})
+active_trackers = {}
 
 
 def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
@@ -93,6 +94,27 @@ def sell(symbol, quantity):
             notify(f"⚠️ No balance to sell for {symbol}")
     except Exception as e:
         notify(f"❌ Sell error: {e}")
+
+def monitor_tracker(symbol, alert_percent=5.0):
+    last_price = get_price(symbol)
+    notify(f"👀 Tracking {symbol} at ${last_price}\nWill alert on {alert_percent}% moves")
+    
+    while symbol in active_trackers:
+        try:
+            current_price = get_price(symbol)
+            change = ((current_price - last_price) / last_price) * 100
+            
+            if abs(change) >= alert_percent:
+                direction = "📈" if change > 0 else "📉"
+                notify(f"{direction} {symbol} moved {change:.2f}%!\nFrom ${last_price} → ${current_price}")
+                last_price = current_price
+
+        except Exception as e:
+            pass
+
+        time.sleep(60)  # check every minute
+    
+    notify(f"🛑 Stopped tracking {symbol}")
 
 
 def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=None, take_profit1=None, take_profit2=None):
@@ -193,6 +215,34 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
                 notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
+                
+                # Auto re-entry analysis
+                try:
+                    from core.analyzer import analyze_coin
+                    notify(f"🤖 Analyzing {symbol} for re-entry...")
+                    analysis = analyze_coin(symbol)
+                    
+                    # Check if re-entry is safe
+                    if "Re-entry safe: Yes" in analysis:
+                        re_entry_price = round(current_price * 0.97, 6)  # 3% below sell
+                        active_alerts[symbol] = {
+                            "target_price": re_entry_price,
+                            "amount": investment,
+                            "custom_stop_price": custom_stop_price,
+                        }
+                        save_state(active_trades, daily_pnl, active_alerts)
+                        thread = threading.Thread(
+                            target=monitor_alert,
+                            args=(symbol, re_entry_price, investment, custom_stop_price)
+                        )
+                        thread.daemon = True
+                        thread.start()
+                        notify(f"📌 Auto re-entry alert set!\n{symbol} → buy at ${re_entry_price}\n{analysis}")
+                    else:
+                        notify(f"⚠️ Re-entry not safe for {symbol}\n{analysis}")
+                except Exception as e:
+                    notify(f"⚠️ Auto re-entry analysis failed: {e}")
+                
                 break
 
         except Exception as e:
