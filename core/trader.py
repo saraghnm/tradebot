@@ -5,6 +5,7 @@ import threading
 from binance.client import Client
 from config import API_KEY, API_SECRET, settings
 from core.notifier import notify
+from core.stream import get_cached_price, start_stream
 
 client = Client(API_KEY, API_SECRET)
 client.timestamp_offset = client.get_server_time()["serverTime"] - int(
@@ -54,6 +55,9 @@ def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
 
 
 def get_price(symbol):
+    cached = get_cached_price(symbol)
+    if cached:
+        return cached
     ticker = client.get_symbol_ticker(symbol=symbol)
     return float(ticker["price"])
 
@@ -264,7 +268,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
 
             continue
 
-        time.sleep(2)
+        time.sleep(0.5)
 
 
 def startup_check():

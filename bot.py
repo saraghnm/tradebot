@@ -8,7 +8,8 @@ import threading
 import core.trader as trader_module
 from core.scheduler import start_scheduler
 from core.trader import get_price
-
+from core.stream import start_stream
+from core.trader import active_trades
 
 def resume_trades():
     from core.trader import monitor_trade
@@ -55,6 +56,14 @@ def resume_alerts():
 startup_check()
 resume_trades()
 resume_alerts()
+
+# Start WebSocket stream for active trades
+def refresh_stream():
+    symbols = list(active_trades.keys())
+    if symbols:
+        start_stream(symbols)
+
+refresh_stream()
 
 # Start scheduler
 daily_pnl_ref = [trader_module.daily_pnl]

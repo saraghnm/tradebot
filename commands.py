@@ -3,6 +3,8 @@
 import threading
 from config import settings
 from core.notifier import notify
+from core.stream import start_stream
+from core.trader import active_trades
 from core.trader import (
     active_trades,
     daily_pnl,
@@ -13,7 +15,7 @@ from core.trader import (
     sell,
     monitor_trade,
 )
-
+start_stream(list(active_trades.keys()))
 
 def handle_message(text):
     global daily_pnl
