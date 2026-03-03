@@ -291,36 +291,36 @@ def handle_message(text):
             """🤖 zTrading Bot Commands
 
 🪙 TRADING:
-- buy COIN 10 → buy $10 of COIN
-- buy COIN 10 0.085 → with stop loss
-- buy COIN 10 0.085 1.30 1.50 → stop + take profits
-- sell COIN → force sell
-- setstop COIN 0.085 → update stop loss
+• buy COIN 10 → buy $10 of COIN
+• buy COIN 10 0.085 → with stop loss
+• buy COIN 10 0.085 1.30 1.50 → stop + take profits
+• sell COIN → force sell
+• setstop COIN 0.085 → update stop loss
 
 🎯 ALERTS:
-- alert COIN 1.70 10 1.60 → buy when price hits 1.70
-- alerts → view all active alerts
-- cancelalert COIN → cancel an alert
+• alert COIN 1.70 10 1.60 → buy when price hits 1.70
+• alerts → view all active alerts
+• cancelalert COIN → cancel an alert
 
 👀 TRACKING:
-- track COIN → alert on 5% moves
-- track COIN 3 → alert on 3% moves
-- untrack COIN → stop tracking
-- trackers → view tracked coins
+• track COIN → alert on 5% moves
+• track COIN 3 → alert on 3% moves
+• untrack COIN → stop tracking
+• trackers → view tracked coins
 
 📊 MONITORING:
-- price COIN → current price
-- status → active trades & P/L
-- summary → daily summary
-- balance → wallet balances
-- orders COIN → last 5 orders
-- analyze COIN → AI trend analysis
+• price COIN → current price
+• status → active trades & P/L
+• summary → daily summary
+• balance → wallet balances
+• orders COIN → last 5 orders
+• analyze COIN → AI trend analysis
 
 ⚙️ SETTINGS:
-- set min_profit 1.5
-- set trail_percent 5.0
-- set hard_stop_loss -1.0
-- set daily_loss_limit -10.0
+• set min_profit 1.5
+• set trail_percent 5.0
+• set hard_stop_loss -1.0
+• set daily_loss_limit -10.0
 
 ❓ help → show this message"""
         )
