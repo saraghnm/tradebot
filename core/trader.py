@@ -194,8 +194,14 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 quantity = quantity - half_quantity
                 half_sold = True
                 half_profit = (take_profit1 - entry_price) * half_quantity
-                notify(f"🎯 Take profit 1 hit!\nSold 50% of {symbol} at ${current_price}\nProfit locked: ${half_profit:.4f}\nHolding remaining: {quantity}")
-
+                
+                # Move stop to break even
+                custom_stop_price = entry_price
+                active_trades[symbol]["custom_stop_price"] = entry_price
+                save_state(active_trades, daily_pnl, active_alerts)
+                
+                notify(f"🎯 Take profit 1 hit!\nSold 50% of {symbol} at ${current_price}\nProfit locked: ${half_profit:.4f}\nHolding remaining: {quantity}\n🔒 Stop moved to break even: ${entry_price}")
+           
             # Take profit 2 — activate trailing on rest
             if take_profit2 and half_sold and not trailing_active and current_price >= take_profit2:
                 trailing_active = True
