@@ -1,15 +1,14 @@
 # bot.py
 
 import time
-from core.notifier import notify, get_updates
-from core.trader import startup_check, active_trades
-from commands import handle_message
 import threading
 import core.trader as trader_module
+from core.notifier import notify, get_updates
+from core.trader import startup_check, active_trades, get_price
 from core.scheduler import start_scheduler
-from core.trader import get_price
 from core.stream import start_stream
-from core.trader import active_trades
+from commands import handle_message
+
 
 def resume_trades():
     from core.trader import monitor_trade
@@ -52,17 +51,16 @@ def resume_alerts():
         notify(f"🔔 Resumed {len(active_alerts)} active alert(s) from last session!")
 
 
-# Startup
-startup_check()
-resume_trades()
-resume_alerts()
-
-# Start WebSocket stream for active trades
 def refresh_stream():
     symbols = list(active_trades.keys())
     if symbols:
         start_stream(symbols)
 
+
+# Startup
+startup_check()
+resume_trades()
+resume_alerts()
 refresh_stream()
 
 # Start scheduler
@@ -80,12 +78,15 @@ else:
 
 # Main loop
 while True:
-    updates = get_updates(offset)
-    for update in updates.get("result", []):
-        offset = update["update_id"] + 1
-        message = update.get("message", {})
-        text = message.get("text", "")
-        if text:
-            print(f"📩 Received: {text}")
-            handle_message(text)
+    try:
+        updates = get_updates(offset)
+        for update in updates.get("result", []):
+            offset = update["update_id"] + 1
+            message = update.get("message", {})
+            text = message.get("text", "")
+            if text:
+                print(f"📩 Received: {text}")
+                handle_message(text)
+    except Exception as e:
+        print(f"⚠️ Main loop error: {e}")
     time.sleep(1)

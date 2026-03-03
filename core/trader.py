@@ -6,6 +6,7 @@ from binance.client import Client
 from config import API_KEY, API_SECRET, settings
 from core.notifier import notify
 from core.stream import get_cached_price, start_stream
+from core.history import save_trade
 
 client = Client(API_KEY, API_SECRET)
 client.timestamp_offset = client.get_server_time()["serverTime"] - int(
@@ -18,6 +19,26 @@ active_trades = _state["active_trades"]
 daily_pnl = _state["daily_pnl"]
 active_alerts = _state.get("active_alerts", {})
 active_trackers = {}
+
+
+def get_error_message(e):
+    error = str(e)
+    if "timed out" in error or "timeout" in error.lower():
+        return "⏳ Connection timeout, retrying..."
+    elif "APIError" in error or "Invalid symbol" in error:
+        return f"❌ Binance API error: {error}"
+    elif "Connection refused" in error or "ConnectionError" in error:
+        return "🔌 Connection refused, retrying..."
+    elif "Insufficient balance" in error or "insufficient" in error.lower():
+        return "💰 Insufficient balance!"
+    elif "filter failure" in error.lower():
+        return "⚠️ Order size too small!"
+    elif "Too many requests" in error or "429" in error:
+        return "🚦 Rate limited by Binance, slowing down..."
+    elif "Invalid API" in error or "Signature" in error:
+        return "🔑 API key error, check config!"
+    else:
+        return f"⚠️ Error: {error}"
 
 
 def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
@@ -48,7 +69,7 @@ def monitor_alert(symbol, target_price, usdt_amount, custom_stop_price=None):
                 thread.start()
                 break
         except Exception as e:
-            notify(f"⚠️ Alert error {symbol}: {e}")
+            notify(f"⚠️ Alert error {symbol}: {get_error_message(e)}")
             time.sleep(30)
             continue
         time.sleep(5)
@@ -71,14 +92,18 @@ def get_lot_size(symbol):
 
 
 def buy(symbol, usdt_amount):
-    price = get_price(symbol)
-    step_size = get_lot_size(symbol)
-    raw_quantity = usdt_amount / price
-    precision = len(str(step_size).rstrip("0").split(".")[-1])
-    quantity = round(raw_quantity - (raw_quantity % step_size), precision)
-    client.order_market_buy(symbol=symbol, quantity=quantity)
-    notify(f"🟢 BUY order placed!\nQuantity: {quantity} {symbol}\nPrice: ${price:,.4f}")
-    return quantity, price
+    try:
+        price = get_price(symbol)
+        step_size = get_lot_size(symbol)
+        raw_quantity = usdt_amount / price
+        precision = len(str(step_size).rstrip("0").split(".")[-1])
+        quantity = round(raw_quantity - (raw_quantity % step_size), precision)
+        client.order_market_buy(symbol=symbol, quantity=quantity)
+        notify(f"🟢 BUY order placed!\nQuantity: {quantity} {symbol}\nPrice: ${price:,.4f}")
+        return quantity, price
+    except Exception as e:
+        notify(f"❌ Buy failed: {get_error_message(e)}")
+        raise
 
 
 def sell(symbol, quantity):
@@ -97,27 +122,28 @@ def sell(symbol, quantity):
         else:
             notify(f"⚠️ No balance to sell for {symbol}")
     except Exception as e:
-        notify(f"❌ Sell error: {e}")
+        notify(f"❌ Sell failed: {get_error_message(e)}")
+
 
 def monitor_tracker(symbol, alert_percent=5.0):
     last_price = get_price(symbol)
     notify(f"👀 Tracking {symbol} at ${last_price}\nWill alert on {alert_percent}% moves")
-    
+
     while symbol in active_trackers:
         try:
             current_price = get_price(symbol)
             change = ((current_price - last_price) / last_price) * 100
-            
+
             if abs(change) >= alert_percent:
                 direction = "📈" if change > 0 else "📉"
                 notify(f"{direction} {symbol} moved {change:.2f}%!\nFrom ${last_price} → ${current_price}")
                 last_price = current_price
 
         except Exception as e:
-            pass
+            notify(f"👀 Tracker error {symbol}: {get_error_message(e)}")
 
-        time.sleep(60)  # check every minute
-    
+        time.sleep(60)
+
     notify(f"🛑 Stopped tracking {symbol}")
 
 
@@ -129,7 +155,6 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
     stop_loss_price = None
     trailing_active = False
     half_sold = False
-    original_quantity = quantity
 
     active_trades[symbol] = {
         "quantity": quantity,
@@ -161,17 +186,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
                 save_trade(symbol, entry_price, current_price, investment, profit, "Custom stop loss")
-                notify(f"🛑 Price stop-loss hit!\nSold {symbol} at ${current_price}\nP/L: ${profit:.4f}")
-                break
-
-            # Daily loss limit
-            if profit <= hard_stop_loss:
-                sell(symbol, quantity)
-                daily_pnl += profit
-                active_trades.pop(symbol, None)
-                save_state(active_trades, daily_pnl, active_alerts)
-                save_trade(symbol, entry_price, current_price, investment, profit, "Hard stop loss")
-                notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
+                notify(f"🛑 Stop-loss hit!\nSold {symbol} at ${current_price}\nP/L: ${profit:.4f}")
                 break
 
             # Hard stop loss
@@ -181,7 +196,17 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
                 save_trade(symbol, entry_price, current_price, investment, profit, "Hard stop loss")
-                notify(f"⛔ SELL - Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
+                notify(f"⛔ Hard stop-loss hit!\nLoss limited to: ${profit:.4f}")
+                break
+
+            # Daily loss limit
+            if daily_pnl + profit <= settings["daily_loss_limit"]:
+                sell(symbol, quantity)
+                daily_pnl += profit
+                active_trades.pop(symbol, None)
+                save_state(active_trades, daily_pnl, active_alerts)
+                save_trade(symbol, entry_price, current_price, investment, profit, "Daily loss limit")
+                notify(f"🚫 Daily loss limit hit!\nTotal daily P/L: ${daily_pnl:.4f}")
                 break
 
             # Take profit 1 — sell 50%
@@ -194,20 +219,20 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 quantity = quantity - half_quantity
                 half_sold = True
                 half_profit = (take_profit1 - entry_price) * half_quantity
-                
+
                 # Move stop to break even
                 custom_stop_price = entry_price
                 active_trades[symbol]["custom_stop_price"] = entry_price
                 save_state(active_trades, daily_pnl, active_alerts)
-                
+
                 notify(f"🎯 Take profit 1 hit!\nSold 50% of {symbol} at ${current_price}\nProfit locked: ${half_profit:.4f}\nHolding remaining: {quantity}\n🔒 Stop moved to break even: ${entry_price}")
-           
+
             # Take profit 2 — activate trailing on rest
             if take_profit2 and half_sold and not trailing_active and current_price >= take_profit2:
                 trailing_active = True
                 highest_price = current_price
                 stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
-                notify(f"🎯 Take profit 2 hit!\nTrailing stop ACTIVATED on remaining {symbol}\nStop-loss at: ${stop_loss_price:.4f}")
+                notify(f"🎯 Take profit 2 hit!\nTrailing stop ACTIVATED on remaining {symbol}\nStop at: ${stop_loss_price:.4f}")
 
             # Update highest price
             if current_price > highest_price:
@@ -219,7 +244,7 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
             if not trailing_active and not take_profit2 and profit >= min_profit:
                 trailing_active = True
                 stop_loss_price = highest_price * (1 - settings["trail_percent"] / 100)
-                notify(f"📈 Trailing stop ACTIVATED\nStop-loss at: ${stop_loss_price:.4f}")
+                notify(f"📈 Trailing stop ACTIVATED\nStop at: ${stop_loss_price:.4f}")
 
             # Check trailing stop
             if trailing_active and current_price <= stop_loss_price:
@@ -227,18 +252,17 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                 daily_pnl += profit
                 active_trades.pop(symbol, None)
                 save_state(active_trades, daily_pnl, active_alerts)
-                save_trade(symbol, entry_price, current_price, investment, profit, "Trailing stop loss")
-                notify(f"🔴 SELL - Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
-                
+                save_trade(symbol, entry_price, current_price, investment, profit, "Trailing stop")
+                notify(f"🔴 Trailing stop hit!\nFinal profit: ${profit:.4f}\nDaily P/L: ${daily_pnl:.4f}")
+
                 # Auto re-entry analysis
                 try:
                     from core.analyzer import analyze_coin
                     notify(f"🤖 Analyzing {symbol} for re-entry...")
                     analysis = analyze_coin(symbol)
-                    
-                    # Check if re-entry is safe
+
                     if "Re-entry safe: Yes" in analysis:
-                        re_entry_price = round(current_price * 0.97, 6)  # 3% below sell
+                        re_entry_price = round(current_price * 0.97, 6)
                         active_alerts[symbol] = {
                             "target_price": re_entry_price,
                             "amount": investment,
@@ -255,15 +279,15 @@ def monitor_trade(symbol, quantity, entry_price, investment, custom_stop_price=N
                     else:
                         notify(f"⚠️ Re-entry not safe for {symbol}\n{analysis}")
                 except Exception as e:
-                    notify(f"⚠️ Auto re-entry analysis failed: {e}")
-                
+                    notify(f"⚠️ Auto re-entry failed: {get_error_message(e)}")
+
                 break
 
         except Exception as e:
             error_count += 1
 
             if error_count == 3:
-                notify(f"⚠️ Connection lost for {symbol}! Retrying...")
+                notify(f"⚠️ Connection lost for {symbol}!\n{get_error_message(e)}")
 
             if error_count < 3:
                 time.sleep(5)
@@ -281,5 +305,5 @@ def startup_check():
     try:
         client.get_account()
     except Exception as e:
-        notify(f"❌ Binance connection failed!\n{e}")
+        notify(f"❌ Binance connection failed!\n{get_error_message(e)}")
         exit(1)
