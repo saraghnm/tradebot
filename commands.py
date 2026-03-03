@@ -15,7 +15,7 @@ from core.trader import (
     sell,
     monitor_trade,
 )
-start_stream(list(active_trades.keys()))
+
 
 def handle_message(text):
     global daily_pnl
