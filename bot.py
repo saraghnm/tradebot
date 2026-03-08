@@ -63,7 +63,7 @@ resume_trades()
 resume_alerts()
 refresh_stream()
 
-# Start scheduler
+# Start scheduler — must be defined BEFORE calling it
 daily_pnl_ref = [trader_module.daily_pnl]
 start_scheduler(active_trades, daily_pnl_ref, get_price)
 
