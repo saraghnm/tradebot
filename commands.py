@@ -48,10 +48,11 @@ def handle_message(text):
         except Exception as e:
             notify(f"❌ Buy failed: {get_error_message(e)}")
 
-    # SELL
+   # SELL
     elif command == "sell" and len(parts) > 1:
         symbol = parts[1].upper() + "USDT"
         try:
+            percent = float(parts[2]) if len(parts) > 2 else 100.0
             trade = active_trades.get(symbol)
             account = client.get_account()
             balance = next(
@@ -60,15 +61,24 @@ def handle_message(text):
             if balance > 0:
                 step_size = get_lot_size(symbol)
                 precision = len(str(step_size).rstrip("0").split(".")[-1])
-                quantity = round(balance - (balance % step_size), precision)
-                sell(symbol, quantity)
+                
+                # Calculate quantity based on percentage
+                sell_quantity = balance * (percent / 100)
+                sell_quantity = round(sell_quantity - (sell_quantity % step_size), precision)
+                
                 current_price = get_price(symbol)
-                from core.history import save_trade
-                if trade:
-                    profit = (current_price - trade["entry_price"]) * quantity
-                    save_trade(symbol, trade["entry_price"], current_price, trade["investment"], profit, "Manual sell")
-                active_trades.pop(symbol, None)
-                notify(f"🔴 Force sell executed!\n{parts[1].upper()} sold: {quantity}")
+                client.order_market_sell(symbol=symbol, quantity=sell_quantity)
+                profit = (current_price - trade["entry_price"]) * sell_quantity if trade else 0
+                
+                # Only remove from active trades if selling 100%
+                if percent >= 100:
+                    from core.history import save_trade
+                    if trade:
+                        save_trade(symbol, trade["entry_price"], current_price, trade["investment"], profit, "Manual sell")
+                    active_trades.pop(symbol, None)
+                    notify(f"🔴 Sold 100% of {parts[1].upper()}\nQuantity: {sell_quantity}\nP/L: ${profit:.4f}")
+                else:
+                    notify(f"🔴 Sold {percent}% of {parts[1].upper()}\nQuantity: {sell_quantity}\nP/L: ${profit:.4f}\n💰 Remaining: {balance - sell_quantity:.4f}")
             else:
                 notify(f"❌ No {parts[1].upper()} balance to sell!")
         except Exception as e:
@@ -275,7 +285,52 @@ Total P/L: ${s['total_profit']}
             f"📈 Daily Trade Summary\nTotal P/L: ${daily_pnl:.4f}\nActive trades: {len(active_trades)}\nSettings:\n"
             + "\n".join([f"  {k}: {v}" for k, v in settings.items()])
         )
+# BUYA - Analyze before buy
+    elif command == "buya" and len(parts) >= 3:
+        symbol = parts[1].upper() + "USDT"
+        if symbol in active_trades:
+            notify(f"⚠️ Already monitoring {parts[1].upper()}!")
+            return
+        try:
+            amount = float(parts[2])
+            custom_stop = float(parts[3]) if len(parts) > 3 else None
+            tp1 = float(parts[4]) if len(parts) > 4 else None
+            tp2 = float(parts[5]) if len(parts) > 5 else None
 
+            notify(f"🔍 Analyzing {parts[1].upper()} before buying...")
+
+            def analyze_and_buy():
+                from core.analyzer import analyze_coin
+                analysis = analyze_coin(parts[1].upper())
+
+                overall = ""
+                for line in analysis.split("\n"):
+                    if line.startswith("Overall:"):
+                        overall = line.split(":", 1)[1].strip().lower()
+                        break
+
+                if "bullish" in overall:
+                    notify(f"✅ Analysis: Bullish! Buying ${amount} of {parts[1].upper()}...\n\n{analysis}")
+                    try:
+                        quantity, entry_price = buy(symbol, amount)
+                        thread = threading.Thread(
+                            target=monitor_trade,
+                            args=(symbol, quantity, entry_price, amount, custom_stop, tp1, tp2)
+                        )
+                        thread.daemon = True
+                        thread.start()
+                    except Exception as e:
+                        notify(f"❌ Buy failed: {get_error_message(e)}")
+                else:
+                    notify(f"🚫 Analysis: {overall.capitalize()} — skipping buy.\n\n{analysis}")
+
+            thread = threading.Thread(target=analyze_and_buy)
+            thread.daemon = True
+            thread.start()
+
+        except Exception as e:
+            notify(f"❌ Error: {get_error_message(e)}")
+            
     # HELP
     elif command == "help":
         notify(
@@ -285,7 +340,9 @@ Total P/L: ${s['total_profit']}
 • buy COIN 10 → buy $10 of COIN
 • buy COIN 10 0.085 → with stop loss
 • buy COIN 10 0.085 1.30 1.50 → stop + take profits
-• sell COIN → force sell
+• buya COIN 10 → analyze first, buy if bullish
+• sell COIN → force sell 100%
+• sell COIN 50 → sell 50% of position
 • setstop COIN 0.085 → update stop loss
 
 🎯 ALERTS:

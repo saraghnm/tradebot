@@ -11,7 +11,14 @@ config.py
 
 # State file (contains trade data)
 state.json
+
+# Trade history
 history.json
+
+# Dashboard
+dash/dashboard/node_modules/
+dash/dashboard/.next/
+dash/dashboard/.env.local
 
 # doc
 *.docx
