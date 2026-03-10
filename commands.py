@@ -1,12 +1,12 @@
 # commands.py
 
 import threading
+import core.trader as trader_module
 from config import settings
 from core.notifier import notify
 from core.stream import start_stream
 from core.trader import (
     active_trades,
-    daily_pnl,
     client,
     get_price,
     get_lot_size,
@@ -16,9 +16,12 @@ from core.trader import (
     get_error_message,
 )
 
+# Always read daily_pnl live from the module — never use an imported copy
+def get_daily_pnl():
+    return trader_module.daily_pnl
+
 
 def handle_message(text):
-    global daily_pnl
     parts = text.strip().split()
     command = parts[0].lower()
 
@@ -28,8 +31,8 @@ def handle_message(text):
         if symbol in active_trades:
             notify(f"⚠️ Already monitoring {parts[1].upper()}!\nSell it first before buying again.")
             return
-        if daily_pnl <= settings["daily_loss_limit"]:
-            notify(f"🚫 Daily loss limit reached! No more trades today.\nDaily P/L: ${daily_pnl:.4f}")
+        if get_daily_pnl() <= settings["daily_loss_limit"]:
+            notify(f"🚫 Daily loss limit reached! No more trades today.\nDaily P/L: ${get_daily_pnl():.4f}")
             return
         try:
             amount = float(parts[2])
@@ -123,19 +126,34 @@ def handle_message(text):
     # STATUS
     elif command == "status":
         try:
+            from core.watcher import active_watchers
+            daily_pnl = get_daily_pnl()
+            msg = ""
+
             if active_trades:
-                msg = ""
+                msg += "📊 Active Trades\n"
                 for symbol, trade in active_trades.items():
                     current_price = get_price(symbol)
                     current_value = trade["quantity"] * current_price
                     profit = current_value - trade["investment"]
+                    pnl_emoji = "🟢" if profit >= 0 else "🔴"
                     stop_info = f"\nStop: ${trade['custom_stop_price']}" if trade.get("custom_stop_price") else ""
-                    tp1_info = f"\nTP1: ${trade['take_profit1']}" if trade.get("take_profit1") else ""
-                    tp2_info = f"\nTP2: ${trade['take_profit2']}" if trade.get("take_profit2") else ""
-                    msg += f"📊 {symbol}\nEntry: ${trade['entry_price']:,.4f}\nCurrent: ${current_price:,.4f}\nP/L: ${profit:.4f}{stop_info}{tp1_info}{tp2_info}\n\n"
-                notify(f"📊 Active trades:\n{msg}Daily P/L: ${daily_pnl:.4f}")
+                    tp1_info  = f"\nTP1:  ${trade['take_profit1']}"       if trade.get("take_profit1")      else ""
+                    tp2_info  = f"\nTP2:  ${trade['take_profit2']}"       if trade.get("take_profit2")      else ""
+                    msg += f"──────────────\n{symbol}\nEntry: ${trade['entry_price']:,.4f}\nNow:   ${current_price:,.4f}\n{pnl_emoji} P/L: ${profit:.4f}{stop_info}{tp1_info}{tp2_info}\n\n"
             else:
-                notify(f"No active trades\nDaily P/L: ${daily_pnl:.4f}")
+                msg += "📊 No active trades\n"
+
+            if active_watchers:
+                msg += "\n👁 Watching\n"
+                for sym in active_watchers:
+                    in_trade = "🔄 in trade" if sym in active_trades else "⏳ scanning"
+                    msg += f"  {sym} — {in_trade}\n"
+            else:
+                msg += "\n👁 No active watchers\n"
+
+            msg += f"\n💰 Daily P/L: ${daily_pnl:.4f}"
+            notify(msg)
         except Exception as e:
             notify(f"❌ Status failed: {get_error_message(e)}")
 
@@ -159,8 +177,8 @@ def handle_message(text):
                 new_stop = float(parts[2])
                 active_trades[symbol]["custom_stop_price"] = new_stop
                 from core.state import save_state
-                from core.trader import daily_pnl, active_alerts
-                save_state(active_trades, daily_pnl, active_alerts)
+                from core.trader import active_alerts
+                save_state(active_trades, trader_module.daily_pnl, active_alerts)
                 notify(f"✅ Stop loss updated!\n{parts[1].upper()} new stop: ${new_stop}")
             except Exception as e:
                 notify(f"❌ Setstop failed: {get_error_message(e)}")
@@ -282,7 +300,7 @@ Total P/L: ${s['total_profit']}
     # SUMMARY
     elif command == "summary":
         notify(
-            f"📈 Daily Trade Summary\nTotal P/L: ${daily_pnl:.4f}\nActive trades: {len(active_trades)}\nSettings:\n"
+            f"📈 Daily Trade Summary\nTotal P/L: ${get_daily_pnl():.4f}\nActive trades: {len(active_trades)}\nSettings:\n"
             + "\n".join([f"  {k}: {v}" for k, v in settings.items()])
         )
 # BUYA - Analyze before buy
@@ -331,6 +349,43 @@ Total P/L: ${s['total_profit']}
         except Exception as e:
             notify(f"❌ Error: {get_error_message(e)}")
             
+    # WATCH — start auto-trading a coin
+    elif command == "watch" and len(parts) >= 3:
+        from core.watcher import start_watcher, active_watchers
+        symbol = parts[1].upper() + "USDT"
+        try:
+            amount      = float(parts[2])
+            custom_stop = float(parts[3]) if len(parts) > 3 else None
+            tp1         = float(parts[4]) if len(parts) > 4 else None
+            tp2         = float(parts[5]) if len(parts) > 5 else None
+
+            if symbol in active_watchers:
+                notify(f"⚠️ Already watching {parts[1].upper()}!")
+                return
+
+            started = start_watcher(symbol, amount, custom_stop, tp1, tp2)
+            if not started:
+                notify(f"⚠️ Already watching {parts[1].upper()}!")
+        except Exception as e:
+            notify(f"❌ Watch failed: {get_error_message(e)}")
+
+    # UNWATCH — stop watching a coin
+    elif command == "unwatch" and len(parts) > 1:
+        from core.watcher import stop_watcher
+        symbol = parts[1].upper() + "USDT"
+        if stop_watcher(symbol):
+            notify(f"🛑 Stopped watching {parts[1].upper()}")
+        else:
+            notify(f"❌ Not watching {parts[1].upper()}")
+
+    # WATCHING — list all active watchers
+    elif command == "watching":
+        from core.watcher import active_watchers
+        if active_watchers:
+            notify("👁 Active watchers:\n" + "\n".join(active_watchers.keys()))
+        else:
+            notify("No active watchers")
+
     # HELP
     elif command == "help":
         notify(
@@ -349,6 +404,13 @@ Total P/L: ${s['total_profit']}
 • alert COIN 1.70 10 1.60 → buy when price hits 1.70
 • alerts → view all active alerts
 • cancelalert COIN → cancel an alert
+
+🤖 AUTO-TRADING:
+• watch COIN 10 → auto-trade COIN with $10 (1D/4H/1H signal)
+• watch COIN 10 0.085 → with stop loss
+• watch COIN 10 0.085 1.30 1.50 → stop + take profits
+• unwatch COIN → stop auto-trading
+• watching → list active watchers
 
 👀 TRACKING:
 • track COIN → alert on 5% moves

@@ -32,6 +32,24 @@ def resume_trades():
         notify(f"▶️ Resumed {len(active_trades)} active trade(s) from last session!")
 
 
+def resume_watchers():
+    from core.state import load_state
+    from core.watcher import start_watcher
+    state = load_state()
+    watchers = state.get("active_watchers", {})
+    for symbol, cfg in watchers.items():
+        print(f"👁 Resuming watcher: {symbol}")
+        start_watcher(
+            symbol,
+            cfg["amount"],
+            cfg.get("custom_stop"),
+            cfg.get("take_profit1"),
+            cfg.get("take_profit2"),
+        )
+    if watchers:
+        notify(f"👁 Resumed {len(watchers)} watcher(s) from last session!")
+
+
 def resume_alerts():
     from core.trader import monitor_alert, active_alerts
     for symbol, alert in active_alerts.items():
@@ -61,6 +79,7 @@ def refresh_stream():
 startup_check()
 resume_trades()
 resume_alerts()
+resume_watchers()
 refresh_stream()
 
 # Start scheduler — must be defined BEFORE calling it
