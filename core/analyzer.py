@@ -73,7 +73,7 @@ Current Price: ${current_price}
 
         ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         message = ai_client.messages.create(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             max_tokens=600,
             messages=[
                 {

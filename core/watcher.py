@@ -1,7 +1,7 @@
 # core/watcher.py
 #
 # Auto-trading watcher — mirrors the Forex bot's scan loop pattern.
-# Analyzes 1D (bias) → 4H (confirmation) → 1H (entry trigger).
+# Analyzes 1D (bias) -> 4H (confirmation) -> 1H (entry trigger).
 # Fires buy/sell using the existing trader.py functions.
 
 import time
@@ -14,7 +14,6 @@ from core.notifier import notify
 from core.state import save_state, load_state
 from core.trader import (
     active_trades,
-    daily_pnl,
     buy,
     monitor_trade,
     get_price,
@@ -23,16 +22,19 @@ from core.trader import (
 
 client = Client(API_KEY, API_SECRET)
 
-# symbol → thread running for it
+# symbol -> thread running for it
 active_watchers = {}
 
-# symbol → watcher config (for persistence)
+# symbol -> watcher config (for persistence)
 saved_watchers = {}
+
+# symbol -> cooldown end timestamp (epoch seconds)
+watcher_cooldowns = {}
 
 SCAN_INTERVAL = 60 * 15  # scan every 15 minutes
 
 
-# ── Candle fetcher ────────────────────────────────────────────────────────────
+# -- Candle fetcher -----------------------------------------------------------
 
 def get_candles(symbol, interval, limit=100):
     raw = client.get_klines(symbol=symbol, interval=interval, limit=limit)
@@ -46,22 +48,15 @@ def get_candles(symbol, interval, limit=100):
     return df
 
 
-# ── Per-timeframe signal ──────────────────────────────────────────────────────
+# -- Per-timeframe signal -----------------------------------------------------
 
 def get_timeframe_bias(symbol, interval, limit=100):
-    """
-    Returns 'BULLISH', 'BEARISH', or 'NEUTRAL' for a given timeframe.
-    Uses EMA9 vs EMA20 crossover — same approach as the Forex trend_engine.
-    """
     df = get_candles(symbol, interval, limit)
     if len(df) < 21:
         return "NEUTRAL"
-
     df["ema9"]  = ta.trend.ema_indicator(df["close"], window=9)
     df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
-
     curr = df.iloc[-1]
-
     if curr["ema9"] > curr["ema20"]:
         return "BULLISH"
     elif curr["ema9"] < curr["ema20"]:
@@ -70,73 +65,48 @@ def get_timeframe_bias(symbol, interval, limit=100):
 
 
 def get_entry_signal(symbol):
-    """
-    Checks 1H candles for an entry trigger.
-    Mirrors the Forex entry_scanner: price near EMA20 + RSI confirmation.
-    Returns 'BUY', 'SELL', or 'NONE' + details dict.
-    """
     df = get_candles(symbol, Client.KLINE_INTERVAL_1HOUR, 100)
     if len(df) < 21:
         return "NONE", None
-
     df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
     df["rsi"]   = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["atr"]   = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"], window=14).average_true_range()
-
-    curr = df.iloc[-1]
+    curr  = df.iloc[-1]
     price = curr["close"]
     ema20 = curr["ema20"]
     rsi   = curr["rsi"]
     atr   = curr["atr"]
-
     details = {
         "price": round(price, 6),
         "ema20": round(ema20, 6),
         "rsi":   round(rsi, 2),
         "atr":   round(atr, 6),
     }
-
-    # BUY: price pulled back to EMA, RSI not overbought
-    near_ema_low  = price <= ema20 * 1.002  # within 0.2% below EMA
+    near_ema_low  = price <= ema20 * 1.002
     rsi_ok_buy    = rsi < 65
-
-    # SELL/EXIT: price extended above EMA, RSI overbought
     near_ema_high = price >= ema20 * 0.998
     rsi_ok_sell   = rsi > 65
-
     if near_ema_low and rsi_ok_buy:
         return "BUY", details
     elif near_ema_high and rsi_ok_sell:
         return "SELL", details
-
     return "NONE", details
 
 
-# ── Main scan logic ───────────────────────────────────────────────────────────
+# -- Main scan logic ----------------------------------------------------------
 
-def scan(symbol, amount, custom_stop=None, take_profit1=None, take_profit2=None):
-    """
-    Full top-down analysis for one symbol.
-    1D bias → 4H confirmation → 1H entry trigger.
-    Returns signal dict or None.
-    """
+def scan(symbol):
     bias_1d = get_timeframe_bias(symbol, Client.KLINE_INTERVAL_1DAY)
     bias_4h = get_timeframe_bias(symbol, Client.KLINE_INTERVAL_4HOUR)
-
-    # Both higher timeframes must agree
     if bias_1d != bias_4h or bias_1d == "NEUTRAL":
         return None
-
     signal, details = get_entry_signal(symbol)
-
-    # Signal must match the higher-timeframe bias
     if signal == "NONE":
         return None
     if signal == "BUY" and bias_1d != "BULLISH":
         return None
     if signal == "SELL" and bias_1d != "BEARISH":
         return None
-
     return {
         "signal":  signal,
         "bias_1d": bias_1d,
@@ -145,13 +115,14 @@ def scan(symbol, amount, custom_stop=None, take_profit1=None, take_profit2=None)
     }
 
 
-# ── Watcher loop ──────────────────────────────────────────────────────────────
+# -- Watcher loop -------------------------------------------------------------
 
 def watch_loop(symbol, amount, custom_stop=None, take_profit1=None, take_profit2=None):
+    import core.trader as _trader
     notify(
-        f"👁 Watching {symbol}\n"
-        f"Amount: ${amount}\n"
-        f"Scans every 15 min — will auto-buy on signal"
+        "👁 Watching " + symbol + "\n"
+        "Amount: $" + str(amount) + "\n"
+        "Scans every 15 min — will auto-buy on signal"
     )
 
     while symbol in active_watchers:
@@ -162,65 +133,133 @@ def watch_loop(symbol, amount, custom_stop=None, take_profit1=None, take_profit2
                 continue
 
             # Skip if daily loss limit hit
-            if daily_pnl <= settings["daily_loss_limit"]:
-                notify(f"🚫 Daily loss limit hit — {symbol} watcher paused for today")
+            if _trader.daily_pnl <= settings["daily_loss_limit"]:
+                notify("🚫 Daily loss limit hit — " + symbol + " watcher paused for today")
                 time.sleep(SCAN_INTERVAL)
                 continue
 
-            result = scan(symbol, amount, custom_stop, take_profit1, take_profit2)
+            # Skip if in cooldown after a loss
+            cooldown_until = watcher_cooldowns.get(symbol, 0)
+            if time.time() < cooldown_until:
+                time.sleep(SCAN_INTERVAL)
+                continue
+
+            result = scan(symbol)
 
             if result and result["signal"] == "BUY":
-                d = result["details"]
+                d   = result["details"]
+                atr = d["atr"]
+
+                # ATR-based risk management
+                sl  = round(d["price"] - (atr * 1.5), 6)
+                tp1 = round(d["price"] + (atr * 2.0), 6)
+                tp2 = round(d["price"] + (atr * 3.0), 6)
+
                 notify(
-                    f"🟢 AUTO SIGNAL: BUY {symbol}\n"
-                    f"──────────────\n"
-                    f"1D: {result['bias_1d']}  4H: {result['bias_4h']}\n"
-                    f"Price: ${d['price']:,}\n"
-                    f"EMA20: ${d['ema20']:,}\n"
-                    f"RSI:   {d['rsi']}\n"
-                    f"ATR:   {d['atr']}\n"
-                    f"──────────────\n"
-                    f"Placing order for ${amount}..."
+                    "🟢 AUTO SIGNAL: BUY " + symbol + "\n"
+                    "──────────────\n"
+                    "1D: " + result["bias_1d"] + "  4H: " + result["bias_4h"] + "\n"
+                    "Price: $" + str(d["price"]) + "\n"
+                    "RSI:   " + str(d["rsi"]) + "\n"
+                    "ATR:   " + str(atr) + "\n"
+                    "──────────────\n"
+                    "Stop:  $" + str(sl) + "\n"
+                    "TP1:   $" + str(tp1) + " (sell 50%)\n"
+                    "TP2:   $" + str(tp2) + " (trail rest)\n"
+                    "──────────────\n"
+                    "Placing order for $" + str(amount) + "..."
                 )
                 quantity, entry_price = buy(symbol, amount)
                 thread = threading.Thread(
                     target=monitor_trade,
-                    args=(symbol, quantity, entry_price, amount, custom_stop, take_profit1, take_profit2)
+                    args=(symbol, quantity, entry_price, amount, sl, tp1, tp2)
                 )
                 thread.daemon = True
                 thread.start()
 
-                # After buying, pause the watcher until trade closes
-                notify(f"✅ {symbol} bought — watcher will resume after trade closes")
+                notify("✅ " + symbol + " bought — watcher will resume after trade closes")
                 while symbol in active_trades and symbol in active_watchers:
                     time.sleep(30)
 
+                # Check if trade closed at a loss — apply cooldown
+                try:
+                    from core.history import get_history
+                    recent = get_history(1)
+                    if recent and recent[-1]["symbol"] == symbol and recent[-1]["profit"] < 0:
+                        cooldown_hours = settings.get("watcher_cooldown_hours", 4)
+                        watcher_cooldowns[symbol] = time.time() + (cooldown_hours * 3600)
+                        notify(
+                            "⏳ " + symbol + " watcher cooling down for " + str(cooldown_hours) + "h\n"
+                            "Last trade was a loss — pausing before re-scanning"
+                        )
+                except Exception:
+                    pass
+
         except Exception as e:
-            notify(f"⚠️ Watcher error {symbol}: {get_error_message(e)}")
+            notify("⚠️ Watcher error " + symbol + ": " + get_error_message(e))
             time.sleep(60)
             continue
 
         time.sleep(SCAN_INTERVAL)
 
-    notify(f"🛑 Watcher stopped for {symbol}")
+    notify("🛑 Watcher stopped for " + symbol)
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
+
+def get_bias(symbol):
+    """Returns formatted bias string for a symbol across all 3 timeframes."""
+    try:
+        bias_1d = get_timeframe_bias(symbol, Client.KLINE_INTERVAL_1DAY)
+        bias_4h = get_timeframe_bias(symbol, Client.KLINE_INTERVAL_4HOUR)
+        signal, details = get_entry_signal(symbol)
+
+        e1d = "📈" if bias_1d == "BULLISH" else "📉" if bias_1d == "BEARISH" else "➡️"
+        e4h = "📈" if bias_4h == "BULLISH" else "📉" if bias_4h == "BEARISH" else "➡️"
+        esig = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "🟡"
+
+        cooldown_until = watcher_cooldowns.get(symbol, 0)
+        cooldown_str = ""
+        if time.time() < cooldown_until:
+            remaining = int((cooldown_until - time.time()) / 60)
+            cooldown_str = "\n⏳ Cooldown: " + str(remaining) + "m remaining"
+
+        watching_str = "👁 Watching" if symbol in active_watchers else "Not watching"
+        rsi_str = "RSI: " + str(details["rsi"]) if details else ""
+        atr_str = "ATR: " + str(details["atr"]) if details else ""
+
+        lines = [
+            "📊 " + symbol + " Bias",
+            "──────────────",
+            e1d + " 1D: " + bias_1d,
+            e4h + " 4H: " + bias_4h,
+            "──────────────",
+            esig + " 1H Signal: " + signal,
+            rsi_str,
+            atr_str,
+            "──────────────",
+            watching_str + cooldown_str,
+        ]
+        return "\n".join(l for l in lines if l)
+
+    except Exception as e:
+        return "❌ Bias check failed for " + symbol + ": " + str(e)
+
 
 def _persist():
     """Save current watcher config to state.json."""
-    from core.trader import active_trades, daily_pnl, active_alerts
-    save_state(active_trades, daily_pnl, active_alerts, saved_watchers)
+    import core.trader as _trader
+    save_state(_trader.active_trades, _trader.daily_pnl, _trader.active_alerts, saved_watchers)
 
 
 def start_watcher(symbol, amount, custom_stop=None, take_profit1=None, take_profit2=None):
     if symbol in active_watchers:
-        return False  # already running
+        return False
 
     active_watchers[symbol] = True
     saved_watchers[symbol] = {
-        "amount": amount,
-        "custom_stop": custom_stop,
+        "amount":       amount,
+        "custom_stop":  custom_stop,
         "take_profit1": take_profit1,
         "take_profit2": take_profit2,
     }
